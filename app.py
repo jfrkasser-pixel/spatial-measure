@@ -120,4 +120,7 @@ if __name__ == "__main__":
     cert, key = os.environ.get("TLS_CERT", "certs/cert.pem"), os.environ.get("TLS_KEY", "certs/key.pem")
     port = int(os.environ.get("PORT", "5000"))
     print(f"\nOpen on your phone:  https://{_lan_ip()}:{port}\n")
-    app.run(host="0.0.0.0", port=port, ssl_context=(cert, key), debug=False)
+    if os.environ.get("NO_TLS"):
+        app.run(host="0.0.0.0", port=port, debug=False)
+    else:
+        app.run(host="0.0.0.0", port=port, ssl_context=(cert, key), debug=False)
