@@ -91,3 +91,29 @@ def test_uncertainty_grows_with_small_marker():
     cal.marker_edge_px /= 4
     cal.mm_per_px *= 4
     assert core.length_uncertainty_mm(cal, 100.0) > u_big
+
+
+def test_reference_object_mode_with_tap_noise():
+    """Calibrate from a 40x50 mm object whose corners are 'tapped' with +-2 px noise."""
+    plane = make_plane_image()
+    img, M = warp(plane, 0.10)
+    rng = np.random.default_rng(1)
+    ref_mm = [(220, 20), (260, 20), (260, 70), (220, 70)]          # TL, TR, BR, BL; 40 wide, 50 high
+    ref_px = project(M, [mm2px(*p) for p in ref_mm]) + rng.normal(0, 2.0, (4, 2))
+    cal = core.calibrate_from_reference(ref_px, 40.0, 50.0)
+    assert cal.source == "reference_object"
+    p = project(M, [mm2px(120, 60), mm2px(220, 60)])
+    assert core.distance_mm(cal, p[0], p[1]) == pytest.approx(100.0, rel=0.05)
+    rect = [mm2px(120, 60), mm2px(220, 60), mm2px(220, 120), mm2px(120, 120)]
+    assert core.polygon_area_mm2(cal, project(M, rect)) == pytest.approx(6000.0, rel=0.08)
+    # hand-tapped reference must report a larger uncertainty than a detected marker would
+    assert core.length_uncertainty_mm(cal, 100.0) > 0
+
+
+def test_reference_object_bad_input():
+    with pytest.raises(core.MeasureError):
+        core.calibrate_from_reference([[0, 0], [10, 0], [10, 10]], 40, 50)          # 3 points
+    with pytest.raises(core.MeasureError):
+        core.calibrate_from_reference([[0, 0], [100, 100], [100, 0], [0, 100]], 40, 50)  # bow-tie
+    with pytest.raises(core.MeasureError):
+        core.calibrate_from_reference([[0, 0], [10, 0], [10, 10], [0, 10]], 0, 50)

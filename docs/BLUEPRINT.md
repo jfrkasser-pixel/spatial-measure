@@ -77,11 +77,42 @@ at many distances and angles, compute residuals, fit.
 - Glossy or blurred markers fail detection. Print matte, flat, not scaled by the printer (verify with a ruler).
 - Browser JPEG capture is not raw; autofocus and digital zoom change nothing for the homography but blur hurts corners.
 
-## 8. Roadmap
+## 8. Working modes (current)
 
-1. Lens calibration and undistort step.
-2. Auto-detect object outline (segmentation, e.g. OpenCV GrabCut or a small model) instead of tapping.
-3. Two-view height: marker on floor and on a side face, or marker plus vertical reference.
-4. Native app (ARKit/ARCore, LiDAR/depth) with the same core API and the marker as precision override.
+| Reference | When | Accuracy |
+|---|---|---|
+| Printed ArUco marker (single) | small scenes, one marker beside the objects | about 1 % |
+| A4 target (4 markers) | desks, floors, groups of objects: markers surround the area | about 0.5-1 %, residual shown |
+| Known object, 4 taps | no printed marker available | 3-5 % and only at the object's own height |
+
+Measuring modes: length (2 taps), area (polygon taps), auto outline (1 tap inside the object).
+Outline uses GrabCut from the tap, then maps the silhouette through the plane homography.
+It is exact for flat objects and footprints, and overstates tall objects (the silhouette includes the sides).
+
+### A4 target
+    python tools/make_target.py prints
+Print `prints/a4_target.png` at 100 % on A4 (actual size, check the 40 mm markers with a ruler).
+Lay it flat on the surface, objects on or beside it, and choose Reference = A4 target.
+Any one to four markers visible is enough; more markers over a wider area give a better scale.
+
+### Lens calibration
+1. Print `prints/chessboard.png` landscape at 100 % (25 mm squares, 9 x 6 inner corners) on a flat board.
+2. Take 10-20 photos with the same phone, camera and resolution as the app, different positions and tilts, board filling different parts of the frame.
+3. `python tools/calibrate_lens.py photos/*.jpg --out lens.json` (aim for reprojection error under 0.7 px).
+4. Put `lens.json` next to `app.py` and restart. Every photo and tap is then undistorted automatically.
+Without it, expect 1-3 % extra error near the image edges on a typical phone.
+
+### Height from a side photo
+A single top-down photo cannot give height. Photograph the object from the side with the marker standing in the same vertical plane as its front face, measure the vertical distance in Length mode, press *Use as: Height*.
+The perspective error of anything off the marker plane is about (height off the plane) / (camera distance).
+
+### Take / load photo
+The button opens the phone's own camera app. It works over plain http with no certificate or browser flag (the live camera view needs HTTPS or a trusted origin).
+
+## 9. Roadmap
+
+1. Several photos of one object combined into a 3D shape (photogrammetry with the markers fixing the scale).
+2. Depth from a native app (ARKit / ARCore, LiDAR) feeding the same geometry code.
+3. Browser-side port of the geometry so the app runs as a static site (GitHub Pages) with real HTTPS.
+4. Validation report: bias, repeatability and k=2 coverage from a set of photos of known objects.
 5. Optional geolocation: WGS84 to ECEF to ENU for georeferenced records.
-6. Validation report generator (bias, repeatability, k=2 coverage).

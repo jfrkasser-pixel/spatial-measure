@@ -34,6 +34,8 @@
 
   <div class="row">
     <button id="btnCapture" class="primary">Capture</button>
+    <button id="btnPhoto">Take / load photo</button>
+    <input id="fileIn" type="file" accept="image/*" capture="environment" class="hidden">
     <button id="btnLive" class="hidden">Back to live</button>
     <button id="btnUndo">Undo point</button>
     <button id="btnClear">Clear</button>
@@ -45,12 +47,26 @@
         <select id="mode">
           <option value="length">Length (2 taps)</option>
           <option value="area">Area (3+ taps)</option>
+          <option value="outline">Auto outline (1 tap inside object)</option>
         </select>
       </label>
-      <label>Marker size (mm)
+      <label>Reference
+        <select id="refMode">
+          <option value="aruco">Printed ArUco marker</option>
+          <option value="a4">A4 target (4 markers)</option>
+          <option value="object">Known object (tap 4 corners)</option>
+        </select>
+      </label>
+      <label class="aruco-only">Marker size (mm)
         <input id="markerMm" type="number" inputmode="decimal" value="50" step="0.1">
       </label>
-      <label>Dictionary
+      <label class="obj-only hidden">Object width (mm)
+        <input id="refW" type="number" inputmode="decimal" value="40" step="0.1">
+      </label>
+      <label class="obj-only hidden">Object height (mm)
+        <input id="refH" type="number" inputmode="decimal" value="50" step="0.1">
+      </label>
+      <label class="aruco-only">Dictionary
         <select id="dict">
           <option value="4x4_50">ArUco 4x4_50</option>
           <option value="5x5_100">ArUco 5x5_100</option>
@@ -63,6 +79,8 @@
     </div>
     <div id="measureOut" class="out mut" style="margin-top:8px">
       Put the printed marker flat on the same surface as what you measure. Capture, tap the points, press Measure.
+      <br>A4 target: print tools output a4_target.png at 100 %, lay it flat next to or under the objects. Auto outline: tap once inside the object on a plain background.
+      <br>Known-object mode: first tap its 4 corners in order top-left, top-right, bottom-right, bottom-left (amber), then tap the points to measure (teal).
     </div>
   </div>
 
@@ -87,7 +105,7 @@
       </label>
       <button id="btnVol" class="primary" style="align-self:flex-end">Estimate</button>
     </div>
-    <div class="mut">Tip: the last Length / Area result auto-fills the dimension fields. Height comes from a second photo of the side with the marker on that face.</div>
+    <div class="mut"><b>Side photo for height:</b> photograph the object from the side with the marker standing on the same vertical plane as its front face (taped to a wall, a box or a book held upright), measure the vertical distance in Length mode, then press <i>Use as: Height</i>. Do the top view for length, width or footprint the same way.</div>
     <div id="volOut" class="out" style="margin-top:8px"></div>
   </div>
 </main>
@@ -95,7 +113,15 @@
 <script>
 const $ = id => document.getElementById(id);
 const video = $('video'), canvas = $('canvas'), ctx = canvas.getContext('2d');
-let frozenBlob = null, points = [], last = {};
+let frozenBlob = null, points = [], refPts = [], last = {};
+const objMode = () => $('refMode').value === 'object';
+let outlinePoly = null;
+$('refMode').onchange = () => {
+  const v = $('refMode').value;
+  document.querySelectorAll('.aruco-only').forEach(e => e.classList.toggle('hidden', v !== 'aruco'));
+  document.querySelectorAll('.obj-only').forEach(e => e.classList.toggle('hidden', v !== 'object'));
+  refPts = []; points = []; overlay = null; outlinePoly = null; redraw();
+};
 
 async function initCamera() {
   try {
@@ -114,10 +140,10 @@ function capture() {
   canvas.toBlob(b => { frozenBlob = b; }, 'image/jpeg', 0.92);
   video.classList.add('hidden'); canvas.classList.remove('hidden');
   $('btnCapture').classList.add('hidden'); $('btnLive').classList.remove('hidden');
-  points = []; redraw();
+  points = []; refPts = []; outlinePoly = null; redraw();
 }
 function live() {
-  frozenBlob = null; points = [];
+  frozenBlob = null; points = []; refPts = []; outlinePoly = null;
   canvas.classList.add('hidden'); video.classList.remove('hidden');
   $('btnLive').classList.add('hidden'); $('btnCapture').classList.remove('hidden');
 }
@@ -132,8 +158,20 @@ function redraw() {
     const k = canvas.width / 800;
     if (overlay) {
       ctx.strokeStyle = '#fbbf24'; ctx.lineWidth = 3 * k;
-      ctx.beginPath(); overlay.forEach((p, i) => i ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1]));
-      ctx.closePath(); ctx.stroke();
+      overlay.forEach(poly => { ctx.beginPath(); poly.forEach((p, i) => i ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1]));
+        ctx.closePath(); ctx.stroke(); });
+    }
+    if (outlinePoly) {
+      ctx.strokeStyle = '#2dd4bf'; ctx.fillStyle = 'rgba(45,212,191,0.22)'; ctx.lineWidth = 3 * k;
+      ctx.beginPath(); outlinePoly.forEach((p, i) => i ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1]));
+      ctx.closePath(); ctx.fill(); ctx.stroke();
+    }
+    if (refPts.length) {
+      ctx.strokeStyle = '#fbbf24'; ctx.fillStyle = '#fbbf24'; ctx.lineWidth = 3 * k;
+      ctx.beginPath(); refPts.forEach((p, i) => i ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1]));
+      if (refPts.length === 4) ctx.closePath(); ctx.stroke();
+      refPts.forEach((p, i) => { ctx.beginPath(); ctx.arc(p[0], p[1], 7 * k, 0, 7); ctx.fill();
+        ctx.font = (22 * k) + 'px sans-serif'; ctx.fillText(['TL','TR','BR','BL'][i], p[0] + 10 * k, p[1] - 10 * k); });
     }
     ctx.strokeStyle = '#2dd4bf'; ctx.fillStyle = '#2dd4bf'; ctx.lineWidth = 3 * k;
     ctx.beginPath(); points.forEach((p, i) => i ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1]));
@@ -149,11 +187,28 @@ canvas.addEventListener('click', e => {
   const r = canvas.getBoundingClientRect();
   const x = (e.clientX - r.left) * canvas.width / r.width;
   const y = (e.clientY - r.top) * canvas.height / r.height;
-  if ($('mode').value === 'length' && points.length >= 2) points = [];
+  if (objMode() && refPts.length < 4) { refPts.push([x, y]); redraw(); return; }
+  const md = $('mode').value;
+  if ((md === 'length' && points.length >= 2) || (md === 'outline' && points.length >= 1)) points = [];
+  outlinePoly = null;
   points.push([x, y]); redraw();
 });
-$('btnUndo').onclick = () => { points.pop(); redraw(); };
-$('btnClear').onclick = () => { points = []; overlay = null; redraw(); };
+$('btnUndo').onclick = () => { if (points.length) points.pop(); else refPts.pop(); redraw(); };
+$('btnClear').onclick = () => { points = []; refPts = []; overlay = null; outlinePoly = null; redraw(); };
+
+// Take / load a photo with the phone's own camera app: works over plain http, no camera permission needed.
+$('btnPhoto').onclick = () => $('fileIn').click();
+$('fileIn').onchange = async e => {
+  const f = e.target.files[0]; if (!f) return;
+  const bmp = await createImageBitmap(f);          // applies the photo's rotation (EXIF)
+  const sc = Math.min(1, 2400 / Math.max(bmp.width, bmp.height));
+  canvas.width = Math.round(bmp.width * sc); canvas.height = Math.round(bmp.height * sc);
+  ctx.drawImage(bmp, 0, 0, canvas.width, canvas.height);
+  canvas.toBlob(b => { frozenBlob = b; points = []; refPts = []; overlay = null; outlinePoly = null; }, 'image/jpeg', 0.92);
+  video.classList.add('hidden'); canvas.classList.remove('hidden');
+  $('btnCapture').classList.add('hidden'); $('btnLive').classList.remove('hidden');
+  e.target.value = '';
+};
 $('btnCapture').onclick = capture;
 $('btnLive').onclick = live;
 
@@ -161,22 +216,36 @@ $('btnMeasure').onclick = async () => {
   if (!frozenBlob) { $('measureOut').innerHTML = '<span class="warn">Capture a frame first.</span>'; return; }
   const fd = new FormData();
   fd.append('frame', frozenBlob, 'frame.jpg');
-  fd.append('payload', JSON.stringify({ mode: $('mode').value, points,
-    marker_size_mm: parseFloat($('markerMm').value), dict: $('dict').value }));
+  const payload = { mode: $('mode').value, points, reference: $('refMode').value,
+    marker_size_mm: parseFloat($('markerMm').value), dict: $('dict').value };
+  if (objMode()) {
+    if (refPts.length !== 4) { $('measureOut').innerHTML = '<span class="warn">Tap the 4 reference corners first (TL, TR, BR, BL).</span>'; return; }
+    payload.ref = { points: refPts, width_mm: parseFloat($('refW').value), height_mm: parseFloat($('refH').value) };
+  }
+  fd.append('payload', JSON.stringify(payload));
   $('measureOut').textContent = 'Computing...';
   const r = await fetch('/api/measure', { method: 'POST', body: fd });
   const d = await r.json();
   if (!d.ok) { $('measureOut').innerHTML = '<span class="err">' + d.error + '</span>'; return; }
-  overlay = d.marker_corners_px; redraw();
+  overlay = objMode() ? null : d.marker_polys_px;
+  outlinePoly = d.polygon_px || null; redraw();
   let h = '';
   if (d.length_mm !== undefined) {
     h = `<strong>${d.length_mm.toFixed(1)} mm</strong> &plusmn; ${d.U_mm_k2.toFixed(1)} mm (k=2)`;
-    last.length = d.length_mm; fillDims('length_mm', d.length_mm);
+    h += useRow([['Length', 'length_mm', d.length_mm], ['Width', 'width_mm', d.length_mm],
+                 ['Height', 'height_mm', d.length_mm], ['Diameter', 'diameter_mm', d.length_mm]]);
   } else {
     h = `<strong>${(d.area_mm2/100).toFixed(1)} cm&sup2;</strong> &plusmn; ${(d.U_rel_k2*100).toFixed(1)} % (k=2)<br>perimeter ${d.perimeter_mm.toFixed(1)} mm`;
-    last.area = d.area_mm2; fillDims('base_area_mm2', d.area_mm2);
+    const btns = [['Footprint area', 'base_area_mm2', d.area_mm2]];
+    if (d.rect_long_mm !== undefined) {
+      h += `<br>bounding rectangle ${d.rect_long_mm.toFixed(1)} x ${d.rect_short_mm.toFixed(1)} mm`;
+      btns.push(['Length', 'length_mm', d.rect_long_mm], ['Width', 'width_mm', d.rect_short_mm],
+                ['Diameter', 'diameter_mm', d.rect_long_mm]);
+    }
+    h += useRow(btns);
   }
-  h += `<div class="mut">scale ${d.mm_per_px.toFixed(3)} mm/px, tilt ratio ${d.tilt_ratio.toFixed(2)}</div>`;
+  const src = { aruco: 'single marker', aruco_multi: d.n_markers + ' markers, fit residual ' + d.fit_residual_mm.toFixed(2) + ' mm', reference_object: 'tapped object' }[d.source];
+  h += `<div class="mut">${src}; scale ${d.mm_per_px.toFixed(3)} mm/px, tilt ratio ${d.tilt_ratio.toFixed(2)}${d.lens_corrected ? ', lens corrected' : ''}</div>`;
   d.warnings.forEach(w => h += `<div class="warn">${w}</div>`);
   $('measureOut').innerHTML = h;
 };
@@ -193,10 +262,15 @@ function renderDims() {
   $('dims').innerHTML = FIELDS[$('shape').value].map(f =>
     `<label>${f}<input data-f="${f}" type="number" inputmode="decimal" step="any"></label>`).join('');
 }
-function fillDims(field, v) {
-  const el = document.querySelector(`[data-f="${field}"]`) ||
-    [...document.querySelectorAll('[data-f]')].find(i => !i.value && i.dataset.f.endsWith('_mm') && field === 'length_mm');
-  if (el && !el.value) el.value = v.toFixed(1);
+function useRow(items) {
+  return '<div class="row" style="margin:8px 0 0"><span class="mut" style="align-self:center">Use as:</span>' +
+    items.map(([label, field, v]) => `<button onclick="useAs('${field}', ${v})">${label}</button>`).join('') + '</div>';
+}
+function useAs(field, v) {
+  const el = document.querySelector(`[data-f="${field}"]`);
+  if (!el) { $('volOut').innerHTML = `<span class="warn">The selected shape has no ${field.replace('_mm','').replace('_',' ')} field. Change the shape first.</span>`; return; }
+  el.value = v.toFixed(1);
+  $('volOut').innerHTML = `<span class="mut">${field} set to ${v.toFixed(1)}</span>`;
 }
 $('shape').onchange = renderDims;
 
@@ -215,6 +289,7 @@ $('btnVol').onclick = async () => {
 };
 
 (async () => {
+  try { const l = await (await fetch('/api/lens')).json(); $('measureOut').insertAdjacentHTML('beforeend', `<br><span class="mut">Lens correction: ${l.loaded ? 'ON (rms ' + l.rms_px.toFixed(2) + ' px)' : 'off (no lens.json)'}</span>`); } catch (e) {}
   const m = await (await fetch('/api/materials')).json();
   $('material').innerHTML = Object.keys(m).map(k => `<option>${k}</option>`).join('');
   renderDims(); initCamera();
