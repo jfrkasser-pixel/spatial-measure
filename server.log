@@ -1,0 +1,8 @@
+nohup: ignoring input
+
+Open on your phone:  http://192.168.1.110:5000   (no TLS)
+
+ * Serving Flask app 'app'
+ * Debug mode: off
+Address already in use
+Port 5000 is in use by another program. Either identify and stop that program, or start the server with a different port.
