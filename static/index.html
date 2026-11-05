@@ -55,9 +55,10 @@
           <option value="aruco">Printed ArUco marker</option>
           <option value="a4">A4 target (4 markers)</option>
           <option value="object">Known object (tap 4 corners)</option>
+          <option value="virtual">Virtual marker (provisional, tap 4 corners)</option>
         </select>
       </label>
-      <label class="aruco-only">Marker size (mm)
+      <label class="aruco-only virt-only">Marker size (mm)
         <input id="markerMm" type="number" inputmode="decimal" value="50" step="0.1">
       </label>
       <label class="obj-only hidden">Object width (mm)
@@ -120,12 +121,13 @@
 const $ = id => document.getElementById(id);
 const video = $('video'), canvas = $('canvas'), ctx = canvas.getContext('2d');
 let frozenBlob = null, points = [], refPts = [], last = {};
-const objMode = () => $('refMode').value === 'object';
+const objMode = () => ['object', 'virtual'].includes($('refMode').value);
 let outlinePoly = null;
 $('refMode').onchange = () => {
   const v = $('refMode').value;
-  document.querySelectorAll('.aruco-only').forEach(e => e.classList.toggle('hidden', v !== 'aruco'));
+  document.querySelectorAll('.aruco-only').forEach(e => e.classList.toggle('hidden', !(v === 'aruco' || (v === 'virtual' && e.classList.contains('virt-only')))));
   document.querySelectorAll('.obj-only').forEach(e => e.classList.toggle('hidden', v !== 'object'));
+  if (v === 'virtual') $('measureOut').innerHTML = 'Virtual marker: tap the 4 corners (TL, TR, BR, BL) of a region that is really a square, such as a square tile or a square drawn on the surface. Its size is a placeholder (the marker size above). Results are provisional until you confirm a real size.';
   refPts = []; points = []; overlay = null; outlinePoly = null; redraw();
 };
 
@@ -222,11 +224,12 @@ $('btnMeasure').onclick = async () => {
   if (!frozenBlob) { $('measureOut').innerHTML = '<span class="warn">Capture a frame first.</span>'; return; }
   const fd = new FormData();
   fd.append('frame', frozenBlob, 'frame.jpg');
-  const payload = { mode: $('mode').value, points, reference: $('refMode').value,
+  const virt = $('refMode').value === 'virtual';
+  const payload = { mode: $('mode').value, points, reference: virt ? 'object' : $('refMode').value,
     marker_size_mm: parseFloat($('markerMm').value), dict: $('dict').value };
   if (objMode()) {
     if (refPts.length !== 4) { $('measureOut').innerHTML = '<span class="warn">Tap the 4 reference corners first (TL, TR, BR, BL).</span>'; return; }
-    payload.ref = { points: refPts, width_mm: parseFloat($('refW').value), height_mm: parseFloat($('refH').value) };
+    payload.ref = { points: refPts, width_mm: virt ? parseFloat($('markerMm').value) : parseFloat($('refW').value), height_mm: virt ? parseFloat($('markerMm').value) : parseFloat($('refH').value) };
   }
   fd.append('payload', JSON.stringify(payload));
   $('measureOut').textContent = 'Computing...';
@@ -237,7 +240,7 @@ $('btnMeasure').onclick = async () => {
   outlinePoly = d.polygon_px || null; redraw();
   // Provisional mode: the server measured with the GUESSED marker size G. A homography fixes
   // shape up to one scale, so the true result is exactly k = real/G times it (k^2 area, k^3 volume).
-  prov = ($('refMode').value === 'aruco' && $('provMode').value === 'guess')
+  prov = (virt || ($('refMode').value === 'aruco' && $('provMode').value === 'guess'))
     ? { G: payload.marker_size_mm, k: 1 } : null;
   kScale = 1; lastRes = d;
   showResult();
@@ -251,7 +254,7 @@ function showResult() {
   const d = lastRes, k = kScale;
   let h = '';
   const rs = prov && k !== 1 ? 2 * 0.5 / (prov.G * k) : 0;   // ruler uncertainty on marker size, relative, k=2
-  const tag = prov && k === 1 ? ' <span class="warn">(provisional, guessed marker)</span>' : '';
+  const tag = prov && k === 1 ? ' <span class="warn">(PROVISIONAL: virtual or guessed marker, no real scale yet)</span>' : '';
   if (d.length_mm !== undefined) {
     h = `<strong>${(d.length_mm * k).toFixed(1)} mm</strong> &plusmn; ${(Math.hypot(d.U_mm_k2 / d.length_mm, rs) * d.length_mm * k).toFixed(1)} mm (k=2)${tag}`;
     h += useRow([['Length', 'length_mm', d.length_mm], ['Width', 'width_mm', d.length_mm],
