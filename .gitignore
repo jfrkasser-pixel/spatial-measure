@@ -8,3 +8,9 @@ venv/
 __pycache__/
 *.bak
 certs/
+server.pid
+server.log
+venv/
+__pycache__/
+*.bak
+certs/
