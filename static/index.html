@@ -55,10 +55,10 @@
           <option value="aruco">Printed ArUco marker</option>
           <option value="a4">A4 target (4 markers)</option>
           <option value="object">Known object (tap 4 corners)</option>
-          <option value="virtual">Virtual marker (provisional, tap 4 corners)</option>
+          <option value="vlines">Virtual square (fit from parallel lines)</option>
         </select>
       </label>
-      <label class="aruco-only virt-only">Marker size (mm)
+      <label class="aruco-only virt-only"><span id="msLabel">Marker size (mm)</span>
         <input id="markerMm" type="number" inputmode="decimal" value="50" step="0.1">
       </label>
       <label class="obj-only hidden">Object width (mm)
@@ -66,6 +66,9 @@
       </label>
       <label class="obj-only hidden">Object height (mm)
         <input id="refH" type="number" inputmode="decimal" value="50" step="0.1">
+      </label>
+      <label class="vl-only hidden">Square looks this big (% of photo width)
+        <input id="vsize" type="range" min="3" max="40" value="12">
       </label>
       <label class="aruco-only">Marker size is
         <select id="provMode">
@@ -121,13 +124,26 @@
 const $ = id => document.getElementById(id);
 const video = $('video'), canvas = $('canvas'), ctx = canvas.getContext('2d');
 let frozenBlob = null, points = [], refPts = [], last = {};
-const objMode = () => ['object', 'virtual'].includes($('refMode').value);
-let outlinePoly = null;
+const objMode = () => $('refMode').value === 'object';
+const vlMode = () => $('refMode').value === 'vlines';
+const refNeeded = () => objMode() ? 4 : vlMode() ? 8 : 0;
+const VL_NAMES = ['A1 start', 'A1 end', 'A2 start', 'A2 end', 'B1 start', 'B1 end', 'B2 start', 'B2 end'];
+function vlHint() {
+  const n = refPts.length;
+  if (n >= 8) return 'Lines set. Choose the square size, set Mode, tap what to measure, press Measure.';
+  const line = ['first line A (e.g. one row of keys)', 'second line A (a parallel row, far from the first)',
+                'first line B (across the rows, e.g. the left side)', 'second line B (e.g. the right side)'][n >> 1];
+  return 'Tap ' + (n % 2 ? 'the END' : 'the START') + ' of the ' + line + '. Long lines, far apart, give the best fit.';
+}
+let outlinePoly = null, vsq = null;
 $('refMode').onchange = () => {
   const v = $('refMode').value;
-  document.querySelectorAll('.aruco-only').forEach(e => e.classList.toggle('hidden', !(v === 'aruco' || (v === 'virtual' && e.classList.contains('virt-only')))));
+  document.querySelectorAll('.aruco-only').forEach(e => e.classList.toggle('hidden', !(v === 'aruco' || (v === 'vlines' && e.classList.contains('virt-only')))));
+  document.querySelectorAll('.vl-only').forEach(e => e.classList.toggle('hidden', v !== 'vlines'));
+  $('msLabel').textContent = v === 'vlines' ? 'Square side X (mm), your choice' : 'Marker size (mm)';
   document.querySelectorAll('.obj-only').forEach(e => e.classList.toggle('hidden', v !== 'object'));
-  if (v === 'virtual') $('measureOut').innerHTML = 'Virtual marker: tap the 4 corners (TL, TR, BR, BL) of a region that is really a square, such as a square tile or a square drawn on the surface. Its size is a placeholder (the marker size above). Results are provisional until you confirm a real size.';
+  vsq = null;
+  if (v === 'vlines') $('measureOut').innerHTML = 'Virtual square: ' + vlHint() + '<br>Lines A and B must lie on the surface you measure and be perpendicular to each other (rows and sides of a keyboard, floor tiles, a table edge and its end).';
   refPts = []; points = []; overlay = null; outlinePoly = null; redraw();
 };
 
@@ -174,7 +190,23 @@ function redraw() {
       ctx.beginPath(); outlinePoly.forEach((p, i) => i ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1]));
       ctx.closePath(); ctx.fill(); ctx.stroke();
     }
-    if (refPts.length) {
+    if (vsq) {
+      ctx.strokeStyle = '#fbbf24'; ctx.fillStyle = 'rgba(251,191,36,0.28)'; ctx.lineWidth = 3 * k;
+      ctx.beginPath(); vsq.forEach((p, i) => i ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1]));
+      ctx.closePath(); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = '#fbbf24'; ctx.font = (22 * k) + 'px sans-serif';
+      ctx.fillText('X = ' + (+$('markerMm').value) + ' mm', vsq[0][0], vsq[0][1] - 10 * k);
+    }
+    if (vlMode() && refPts.length) {
+      const cols = ['#fbbf24', '#fbbf24', '#60a5fa', '#60a5fa'];
+      for (let i = 0; i < refPts.length; i++) {
+        const c = cols[i >> 1]; ctx.strokeStyle = c; ctx.fillStyle = c; ctx.lineWidth = 3 * k;
+        const p = refPts[i];
+        if (i % 2 === 1) { const q = refPts[i - 1]; ctx.beginPath(); ctx.moveTo(q[0], q[1]); ctx.lineTo(p[0], p[1]); ctx.stroke(); }
+        ctx.beginPath(); ctx.arc(p[0], p[1], 6 * k, 0, 7); ctx.fill();
+        if (i % 2 === 0) { ctx.font = (20 * k) + 'px sans-serif'; ctx.fillText((i >> 2 ? 'B' : 'A') + (((i >> 1) % 2) + 1), p[0] + 9 * k, p[1] - 9 * k); }
+      }
+    } else if (refPts.length) {
       ctx.strokeStyle = '#fbbf24'; ctx.fillStyle = '#fbbf24'; ctx.lineWidth = 3 * k;
       ctx.beginPath(); refPts.forEach((p, i) => i ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1]));
       if (refPts.length === 4) ctx.closePath(); ctx.stroke();
@@ -195,14 +227,19 @@ canvas.addEventListener('click', e => {
   const r = canvas.getBoundingClientRect();
   const x = (e.clientX - r.left) * canvas.width / r.width;
   const y = (e.clientY - r.top) * canvas.height / r.height;
-  if (objMode() && refPts.length < 4) { refPts.push([x, y]); redraw(); return; }
+  if (refNeeded() > refPts.length) {
+    refPts.push([x, y]); vsq = null; redraw();
+    if (vlMode()) { $('measureOut').innerHTML = 'Virtual square: ' + vlHint(); if (refPts.length === 8) $('btnMeasure').click(); }
+    return;
+  }
   const md = $('mode').value;
   if ((md === 'length' && points.length >= 2) || (md === 'outline' && points.length >= 1)) points = [];
   outlinePoly = null;
   points.push([x, y]); redraw();
 });
 $('btnUndo').onclick = () => { if (points.length) points.pop(); else refPts.pop(); redraw(); };
-$('btnClear').onclick = () => { points = []; refPts = []; overlay = null; outlinePoly = null; redraw(); };
+$('vsize').oninput = () => { if (vlMode() && refPts.length === 8) $('btnMeasure').click(); };
+$('btnClear').onclick = () => { points = []; refPts = []; overlay = null; outlinePoly = null; vsq = null; redraw(); };
 
 // Take / load a photo with the phone's own camera app: works over plain http, no camera permission needed.
 $('btnPhoto').onclick = () => $('fileIn').click();
@@ -224,19 +261,32 @@ $('btnMeasure').onclick = async () => {
   if (!frozenBlob) { $('measureOut').innerHTML = '<span class="warn">Capture a frame first.</span>'; return; }
   const fd = new FormData();
   fd.append('frame', frozenBlob, 'frame.jpg');
-  const virt = $('refMode').value === 'virtual';
-  const payload = { mode: $('mode').value, points, reference: virt ? 'object' : $('refMode').value,
+  const virt = vlMode();
+  const payload = { mode: $('mode').value, points, reference: virt ? 'virtual' : $('refMode').value,
     marker_size_mm: parseFloat($('markerMm').value), dict: $('dict').value };
   if (objMode()) {
     if (refPts.length !== 4) { $('measureOut').innerHTML = '<span class="warn">Tap the 4 reference corners first (TL, TR, BR, BL).</span>'; return; }
-    payload.ref = { points: refPts, width_mm: virt ? parseFloat($('markerMm').value) : parseFloat($('refW').value), height_mm: virt ? parseFloat($('markerMm').value) : parseFloat($('refH').value) };
+    payload.ref = { points: refPts, width_mm: parseFloat($('refW').value), height_mm: parseFloat($('refH').value) };
+  }
+  if (virt) {
+    if (refPts.length !== 8) { $('measureOut').innerHTML = '<span class="warn">' + vlHint() + '</span>'; return; }
+    payload.virtual = { points: refPts, side_mm: parseFloat($('markerMm').value), side_px: $('vsize').value / 100 * canvas.width };
+    const need = { length: 2, area: 3, outline: 1 }[payload.mode];
+    if (points.length < need) payload.preview = true;
   }
   fd.append('payload', JSON.stringify(payload));
   $('measureOut').textContent = 'Computing...';
   const r = await fetch('/api/measure', { method: 'POST', body: fd });
   const d = await r.json();
   if (!d.ok) { $('measureOut').innerHTML = '<span class="err">' + d.error + '</span>'; return; }
-  overlay = objMode() ? null : d.marker_polys_px;
+  if (d.preview) {
+    overlay = null; vsq = d.virtual_square_px; redraw();
+    $('measureOut').innerHTML = 'Virtual square drawn: X = ' + (+$('markerMm').value) + ' mm. Move the slider until it matches a real thing of that size, or just tap what you want to measure and press Measure.'
+      + (d.warnings.filter(w => !w.startsWith('Virtual square:')).map(w => '<div class="warn">' + w + '</div>').join(''));
+    return;
+  }
+  overlay = (objMode() || virt) ? null : d.marker_polys_px;
+  vsq = virt ? d.virtual_square_px : null;
   outlinePoly = d.polygon_px || null; redraw();
   // Provisional mode: the server measured with the GUESSED marker size G. A homography fixes
   // shape up to one scale, so the true result is exactly k = real/G times it (k^2 area, k^3 volume).
@@ -269,8 +319,8 @@ function showResult() {
     }
     h += useRow(btns);
   }
-  const src = { aruco: 'single marker', aruco_multi: d.n_markers + ' markers, fit residual ' + d.fit_residual_mm.toFixed(2) + ' mm', reference_object: 'tapped object' }[d.source];
-  h += `<div class="mut">${src}; scale ${(d.mm_per_px * k).toFixed(3)} mm/px, tilt ratio ${d.tilt_ratio.toFixed(2)}${d.lens_corrected ? ', lens corrected' : ''}</div>`;
+  const src = { aruco: 'single marker', aruco_multi: d.n_markers + ' markers, fit residual ' + d.fit_residual_mm.toFixed(2) + ' mm', reference_object: 'tapped object', virtual_square: 'virtual square fitted from your lines' }[d.source];
+  h += `<div class="mut">${src}; scale ${(d.mm_per_px * k).toFixed(3)} mm/px, tilt ratio ${d.tilt_ratio.toFixed(2)}${d.lens_corrected ? ', lens corrected' : ''}${d.fit ? `; focal ${d.fit.f_px.toFixed(0)} px (${d.fit.f_source}), lines ${d.fit.angle_deg.toFixed(0)}&deg; apart` : ''}</div>`;
   d.warnings.forEach(w => h += `<div class="warn">${w}</div>`);
   if (prov) {
     h += `<div class="row" style="margin:8px 0 0"><label>Real marker size (mm), measured with a ruler

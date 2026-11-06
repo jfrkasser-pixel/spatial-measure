@@ -72,7 +72,15 @@ def measure():
                 ref = dict(ref, points=core.undistort_points(ref["points"], LENS, size).tolist())
 
         reference = p.get("reference") or ("object" if ref else "aruco")
-        if reference == "object":
+        vs = p.get("virtual")
+        if reference == "virtual":
+            if not vs:
+                raise core.MeasureError("Virtual square lines missing.")
+            lp = vs["points"]
+            if LENS is not None:
+                lp = core.undistort_points(lp, LENS, size).tolist()
+            cal = core.calibrate_virtual_square(size, lp, float(vs["side_mm"]), float(vs["side_px"]), vs.get("f_px"))
+        elif reference == "object":
             if not ref:
                 raise core.MeasureError("Reference object corners missing.")
             cal = core.calibrate_from_reference(ref["points"], ref["width_mm"], ref["height_mm"])
@@ -97,7 +105,14 @@ def measure():
             "warnings": [],
             "marker_polys_px": [to_raw(q) for q in (cal.marker_polys_px or [cal.corners_px.tolist()])],
         }
-        if cal.marker_edge_px < 60:
+        if cal.source == "virtual_square":
+            fi = cal.fit_info
+            out["virtual_square_px"] = to_raw(cal.corners_px)
+            out["fit"] = {"f_px": fi["f_px"], "f_source": fi["f_source"], "angle_deg": fi["angle_deg"]}
+            out["warnings"] += fi["warnings"]
+            out["warnings"].append("Virtual square: perspective comes from your tapped lines and the scale is the size you chose "
+                                   "(assumed 4 % fit uncertainty). Provisional until the size is confirmed.")
+        if cal.marker_edge_px < 60 and cal.source != "virtual_square":
             out["warnings"].append("Marker is small in the image (<60 px): move closer or use a bigger marker.")
         if cal.source == "reference_object":
             out["warnings"].append("Hand-tapped reference: valid only for points at the same height as the reference's top face.")
@@ -105,6 +120,10 @@ def measure():
             out["warnings"].append("Strong tilt: accuracy drops. Shoot closer to top-down.")
         if LENS is None:
             out["warnings"].append("No lens calibration loaded: expect 1-3 % extra error near the image edges.")
+
+        if p.get("preview"):
+            out["preview"] = True
+            return jsonify(out)
 
         mode = p.get("mode", "length")
         if mode == "length":

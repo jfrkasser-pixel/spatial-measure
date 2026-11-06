@@ -116,3 +116,15 @@ The button opens the phone's own camera app. It works over plain http with no ce
 3. Browser-side port of the geometry so the app runs as a static site (GitHub Pages) with real HTTPS.
 4. Validation report: bias, repeatability and k=2 coverage from a set of photos of known objects.
 5. Optional geolocation: WGS84 to ECEF to ENU for georeferenced records.
+
+
+## Virtual square (fit from parallel lines)
+
+When no printed marker is available, the surface orientation can be recovered from the scene itself.
+Tap two pairs of lines that are parallel on the surface and perpendicular to each other (A1, A2 and B1, B2:
+rows and sides of a keyboard, floor tiles). Their vanishing points give the focal length
+(f^2 = -(v1-c).(v2-c)) and the plane orientation, so pixels map to the plane up to ONE scale.
+The scale is a free choice: a square of side X (mm, chosen by the user) is declared to look a given size in the photo.
+Everything measured is then X-scaled and provisional until X is confirmed with a real dimension (Confirm size / cross-check).
+Synthetic accuracy with 300 px lines in a 1000 px photo: median length error 0.6 % (1 px tap noise), 1.2 % (2 px), 2.4 % (4 px);
+the app assumes 4 % fit uncertainty. Not valid for curved surfaces; lens distortion is corrected only if lens.json is loaded.

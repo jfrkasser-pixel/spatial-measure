@@ -76,3 +76,18 @@ def test_estimate(client):
                                            "material": "plywood", "fill_factor": 1})
     d = r.get_json()
     assert d["ok"] and d["volume_l"] == pytest.approx(24.0)
+
+
+def test_virtual_square_endpoint_preview_and_length(client):
+    import test_virtual as v
+    pts, rvec, tvec = v.scene()
+    img = np.full((v.H_IMG, v.W, 3), 128, np.uint8)
+    sp = v.side_px_for(rvec, tvec, 40.0)
+    a, b = v.project([(20, 30), (220, 30)], rvec, tvec)
+    vs = {"points": pts.tolist(), "side_mm": 40.0, "side_px": sp}
+    code, d = post(client, img, {"mode": "length", "reference": "virtual", "virtual": vs, "points": [], "preview": True})
+    assert code == 200 and d["preview"] and len(d["virtual_square_px"]) == 4
+    code, d = post(client, img, {"mode": "length", "reference": "virtual", "virtual": vs, "points": [a.tolist(), b.tolist()]})
+    assert code == 200 and abs(d["length_mm"] - 200) < 4 and d["source"] == "virtual_square"
+    code, d = post(client, img, {"mode": "length", "reference": "virtual", "points": [a.tolist(), b.tolist()]})
+    assert code == 400

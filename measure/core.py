@@ -132,6 +132,95 @@ def calibrate_from_reference(corners_px, width_mm, height_mm, corner_unc_px=4.0)
                             corner_unc_px=float(corner_unc_px), source="reference_object")
 
 
+def calibrate_virtual_square(img_size, lines_px, side_mm, side_px, f_px=None, rel_scale_unc=0.04) -> PlaneCalibration:
+    """Perspective-correct virtual square fitted from two pairs of parallel lines.
+
+    lines_px: 8 points = 4 segments (A1, A2, B1, B2). A1/A2 are parallel on the surface, B1/B2
+    are parallel on the surface and perpendicular to A (for example the rows and the sides of a
+    keyboard). Their vanishing points give the surface orientation and the focal length, so the
+    image-to-plane mapping is known up to one scale. The scale is fixed by declaring that a square
+    of side_mm has an image area of side_px squared at the centre of the lines (side_px is its apparent size). side_mm is a free choice
+    (to be confirmed later): the picture itself cannot tell the real size.
+    """
+    pts = np.asarray(lines_px, dtype=np.float64).reshape(-1, 2)
+    if pts.shape != (8, 2):
+        raise MeasureError("Virtual square needs 8 line points: 2 lines in direction A, then 2 lines in direction B.")
+    if side_mm <= 0 or side_px <= 0:
+        raise MeasureError("Square size must be positive.")
+    w, h = img_size
+    c = np.array([w / 2.0, h / 2.0])
+    hom = lambda p: np.array([p[0], p[1], 1.0])
+    lines = [np.cross(hom(pts[2 * i]), hom(pts[2 * i + 1])) for i in range(4)]
+    if any(np.linalg.norm(l[:2]) < 1e-9 for l in lines):
+        raise MeasureError("Two taps of one line are on the same spot.")
+    v1 = np.cross(lines[0], lines[1])          # vanishing point of direction A (homogeneous)
+    v2 = np.cross(lines[2], lines[3])          # vanishing point of direction B
+    if np.linalg.norm(v1) < 1e-9 or np.linalg.norm(v2) < 1e-9:
+        raise MeasureError("The two lines of a pair are identical.")
+    warnings = []
+    diag = max(w, h)
+
+    def finite(v):
+        return abs(v[2]) > 1e-9 * max(abs(v[0]), abs(v[1]), 1.0)
+
+    f, f_src = None, "assumed"
+    if f_px:
+        f, f_src = float(f_px), "given"
+    elif finite(v1) and finite(v2):
+        p1, p2 = v1[:2] / v1[2], v2[:2] / v2[2]
+        f2 = -float(np.dot(p1 - c, p2 - c))
+        if f2 > 0 and 0.4 * diag < math.sqrt(f2) < 3.0 * diag:
+            f, f_src = math.sqrt(f2), "from the vanishing points"
+    if f is None:
+        f = 0.8 * diag
+        warnings.append("Focal length could not be recovered from the lines; assumed %.0f px (typical phone camera)." % f)
+    K = np.array([[f, 0, c[0]], [0, f, c[1]], [0, 0, 1.0]])
+    Ki = np.linalg.inv(K)
+    d1 = Ki @ v1
+    d1 /= np.linalg.norm(d1)
+    d2 = Ki @ v2
+    d2 /= np.linalg.norm(d2)
+    angle = math.degrees(math.acos(max(-1.0, min(1.0, abs(float(d1 @ d2))))))
+    if abs(angle - 90) > 6:
+        warnings.append("The two directions are %.0f degrees apart instead of 90: re-tap longer, truly perpendicular lines." % angle)
+    d2 = d2 - (d1 @ d2) * d1
+    nrm = np.linalg.norm(d2)
+    if nrm < 1e-6:
+        raise MeasureError("The two line directions are the same: tap one pair along the rows and one pair across them.")
+    d2 /= nrm
+    n = np.cross(d1, d2)
+    # orient the normal so that rays through the lines hit the plane in front of the camera
+    r_c = Ki @ np.array([pts[:, 0].mean(), pts[:, 1].mean(), 1.0])
+    if n @ r_c < 0:
+        n = -n
+    H0 = np.vstack([d1, d2, n]) @ Ki           # px -> (u, v, w), units of camera-to-plane distance
+
+    def apply(Hm, p):
+        q = Hm @ np.array([p[0], p[1], 1.0])
+        return q[:2] / q[2]
+
+    centre = pts.mean(axis=0)
+    cu = apply(H0, centre)
+    upp = math.sqrt(abs(np.linalg.det(np.column_stack([apply(H0, centre + [1, 0]) - cu, apply(H0, centre + [0, 1]) - cu]))))
+    m = float(side_mm) / (float(side_px) * upp)
+    S = np.diag([m, m, 1.0])
+    H = S @ H0
+    Hinv = np.linalg.inv(H)
+    pc = apply(H, centre)
+    half = side_mm / 2.0
+    quad = np.array([apply(Hinv, pc + [-half, -half]), apply(Hinv, pc + [half, -half]),
+                     apply(Hinv, pc + [half, half]), apply(Hinv, pc + [-half, half])])
+    edges = [np.linalg.norm(quad[(i + 1) % 4] - quad[i]) for i in range(4)]
+    tilt = min(min(edges[0], edges[2]) / max(edges[0], edges[2]), min(edges[1], edges[3]) / max(edges[1], edges[3]))
+    mean_edge = float(np.mean(edges))
+    cal = PlaneCalibration(H=H, mm_per_px=float(side_mm / mean_edge), marker_edge_px=mean_edge, marker_id=-1,
+                           corners_px=quad, tilt_ratio=float(tilt),
+                           corner_unc_px=float(rel_scale_unc * mean_edge / math.sqrt(2)),
+                           source="virtual_square")
+    cal.fit_info = {"f_px": float(f), "f_source": f_src, "angle_deg": float(angle), "warnings": warnings}
+    return cal
+
+
 def to_plane(H, pts_px):
     pts = np.asarray(pts_px, dtype=np.float64).reshape(-1, 1, 2)
     return cv2.perspectiveTransform(pts, H).reshape(-1, 2)
